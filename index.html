@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Data Logger (ID ver / BPM108 Fixed)</title>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/tone/14.8.49/Tone.js"></script>
+
+<style>
+  body {
+    font-family: sans-serif;
+    padding: 20px;
+    text-align: center;
+    background: #f0f0f0;
+    transition: background 0.5s;
+  }
+  input[type="text"] {
+    padding: 10px;
+    font-size: 1.2em;
+    width: 200px;
+    text-align: center;
+    border-radius: 5px;
+    border: 1px solid #ccc;
+    margin-bottom: 10px;
+  }
+  button {
+    padding: 15px 30px;
+    font-size: 1.2em;
+    cursor: pointer;
+    border: none;
+    background: #333;
+    color: white;
+    border-radius: 8px;
+    margin: 10px;
+  }
+  button#send-btn {
+    background: #4CAF50;
+    display: none;
+  }
+  button:disabled {
+    background: #999;
+    cursor: not-allowed;
+  }
+  #status, #debug {
+    margin: 15px 0;
+    font-size: 1.2em;
+  }
+  #debug {
+    color: #666;
+    font-size: 0.9em;
+  }
+  .active {
+    background: #e0f7fa;
+  }
+</style>
+</head>
+
+<body>
+
+<div>
+  <input type="text" id="subject-id" placeholder="被験者ID">
+</div>
+
+<button id="start">Start</button>
+<button id="send-btn">送信</button>
+
+<div id="status">停止中</div>
+<div id="debug">Wait...</div>
+
+<script>
+const GAS_URL =
+  "https://script.google.com/macros/s/AKfycbxGAOkqkvLAykyJbOldYCZ2qeAh-RpO5i9Mxd0qpktd6pP1246Zu7S4XwJit3KAUSU/exec";
+
+// ==========================================
+// 定数
+// ==========================================
+const FIXED_BPM = 108;
+const HISTORY_DURATION = 1500;
+const MOVE_THRESHOLD = 2.0;
+
+// ==========================================
+// シンセ
+// ==========================================
+const polySynth = new Tone.PolySynth(Tone.Synth, {
+  oscillator: { type: "sawtooth" },
+  envelope: { attack: 0.1, decay: 0.2, sustain: 0.5, release: 1 },
+  volume: -5
+}).toDestination();
+
+// ==========================================
+// 変数
+// ==========================================
+let isPlaying = false;
+let currentNoteIndex = 0;
+
+let motionHistory = [];
+let currentStd = 0;
+
+let logData = [];
+let startTime = 0;
+
+let exploratoryActionCount = 0;
+let isUserMoving = false;
+
+// ==========================================
+// パターン定義
+// ==========================================
+const patterns = {
+  A1: [ 
+    "C2","G2","E3","B3","D4","G4","E5",null,
+    "C5","A4","G4","E4","C4","A3","G3","E3"
+  ],
+  A2: [
+    "D2","A2","F3","C4","E4","A4","D5","F5",
+    "B4","G4","F4","D4","B3","G3","F3","D3"
+  ],
+  B1: [ 
+    "C3",null,"E4","G4","B4",null,"C5","G3",
+    "A3","C4","E4","G4","A4","C5","E5",null
+  ],
+  B2: [ 
+    "F3","A3","C4","E4","G4","A4","C5",null,
+    "G2","B2","D3","F3","G3","B3","D4","G4"
+  ]
+};
+
+const patternOrder = ["A1", "A2", "B1", "B2"];
+let currentPatternIndex = 0;
+
+// ==========================================
+// Wake Lock
+// ==========================================
+let wakeLock = null;
+async function requestWakeLock() {
+  if ("wakeLock" in navigator) {
+    wakeLock = await navigator.wakeLock.request("screen");
+  }
+}
+
+// ==========================================
+// 開始処理
+// ==========================================
+document.getElementById("start").onclick = async () => {
+  const subjectId = document.getElementById("subject-id").value.trim();
+  if (!subjectId) {
+    alert("被験者IDを入力してください");
+    return;
+  }
+  document.getElementById("subject-id").disabled = true;
+
+  if (typeof DeviceMotionEvent?.requestPermission === "function") {
+    const p = await DeviceMotionEvent.requestPermission();
+    if (p !== "granted") return;
+  }
+
+  await Tone.start();
+  await requestWakeLock();
+
+  window.addEventListener("devicemotion", handleMotion);
+
+  startTime = performance.now();
+  logData = [];
+  exploratoryActionCount = 0;
+
+  setInterval(updateLoop, 100);
+
+  document.getElementById("status").innerText =
+    "歩いてください (ID: " + subjectId + ")";
+  document.getElementById("start").style.display = "none";
+  document.getElementById("send-btn").style.display = "inline-block";
+  document.body.classList.add("active");
+};
+
+document.getElementById("send-btn").onclick = sendCSVToGmail;
+
+// ==========================================
+// 加速度処理
+// ==========================================
+function handleMotion(e) {
+  const acc = e.accelerationIncludingGravity;
+  if (!acc) return;
+
+  const mag = Math.sqrt(acc.x**2 + acc.y**2 + acc.z**2);
+  const now = performance.now();
+
+  motionHistory.push({ time: now, val: mag });
+  motionHistory = motionHistory.filter(
+    d => now - d.time < HISTORY_DURATION
+  );
+
+  currentStd = computeStd(motionHistory.map(d => d.val));
+
+  if (!isPlaying && mag > 13.0) startSequence();
+}
+
+// ==========================================
+// ログ更新
+// ==========================================
+function updateLoop() {
+  if (!isPlaying) return;
+
+  const nowMoving = currentStd > MOVE_THRESHOLD;
+  if (nowMoving !== isUserMoving) {
+    exploratoryActionCount++;
+    isUserMoving = nowMoving;
+  }
+
+  document.getElementById("debug").innerText =
+    `BPM: ${FIXED_BPM} / Std: ${currentStd.toFixed(2)} / Pattern: ${patternOrder[currentPatternIndex]}`;
+
+  logData.push({
+    time: ((performance.now() - startTime)/1000).toFixed(3),
+    std: currentStd.toFixed(4),
+    bpm: FIXED_BPM,
+    isMoving: isUserMoving ? 1 : 0,
+    switchCount: exploratoryActionCount,
+    pattern: patternOrder[currentPatternIndex]
+  });
+}
+
+// ==========================================
+// シーケンス
+// ==========================================
+function startSequence() {
+  isPlaying = true;
+  currentNoteIndex = 0;
+  playNextNote();
+}
+
+function playNextNote() {
+  const patternName = patternOrder[currentPatternIndex];
+  const pattern = patterns[patternName];
+
+  if (currentNoteIndex >= pattern.length) {
+    finishSequence();
+    return;
+  }
+
+  const beatTime = 60 / FIXED_BPM;
+  const base = beatTime / 2;
+  const swing = 0.25;
+  const duration =
+    currentNoteIndex % 2 === 0
+      ? base * (1 + swing)
+      : base * (1 - swing);
+
+  const note = pattern[currentNoteIndex];
+  if (note) polySynth.triggerAttackRelease(note, duration * 0.8);
+
+  document.getElementById("status").innerText =
+    `再生中 ${patternName} (${currentNoteIndex + 1}/${pattern.length})`;
+
+  setTimeout(() => {
+    currentNoteIndex++;
+    playNextNote();
+  }, duration * 1000);
+}
+
+function finishSequence() {
+  isPlaying = false;
+  currentPatternIndex =
+    (currentPatternIndex + 1) % patternOrder.length;
+
+  document.getElementById("status").innerText =
+    "待機中... 次: " + patternOrder[currentPatternIndex];
+}
+
+// ==========================================
+// Utility
+// ==========================================
+function computeStd(arr) {
+  if (!arr.length) return 0;
+  const mean = arr.reduce((s,v)=>s+v,0)/arr.length;
+  return Math.sqrt(
+    arr.reduce((s,v)=>s+(v-mean)**2,0)/arr.length
+  );
+}
+
+// ==========================================
+// CSV送信
+// ==========================================
+function sendCSVToGmail() {
+  if (!logData.length) return alert("データなし");
+
+  const subjectId = document.getElementById("subject-id").value;
+  let csv = "Time,STD,BPM,IsMoving,SwitchCount,Pattern\n";
+
+  logData.forEach(r => {
+    csv += `${r.time},${r.std},${r.bpm},${r.isMoving},${r.switchCount},${r.pattern}\n`;
+  });
+
+  fetch(GAS_URL, {
+    method: "POST",
+    body: JSON.stringify({
+      csvData: csv,
+      fileName: `Data_${subjectId}_${new Date().toISOString().slice(0,10)}.csv`
+    })
+  }).then(() => alert("送信完了"));
+}
+</script>
+
+</body>
+</html>
