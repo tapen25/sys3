@@ -223,7 +223,7 @@ function updateLoop() {
   }
 
   document.getElementById("debug").innerText =
-    `BPM: ${FIXED_BPM} / Std: ${currentStd.toFixed(2)} / Pattern: ${patternOrder[currentPatternIndex]}`;
+    `BPM: ${FIXED_BPM} / Std: ${currentStd.toFixed(2)} `;
 
   logData.push({
     time: ((performance.now() - startTime)/1000).toFixed(3),
@@ -302,7 +302,7 @@ function finishSequence() {
     (currentPatternIndex + 1) % patternOrder.length;
 
   document.getElementById("status").innerText =
-    "待機中... 次: " + patternOrder[currentPatternIndex];
+    "待機中...: ";
 }
 
 // ==========================================
