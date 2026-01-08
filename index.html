@@ -296,15 +296,18 @@ function stopKick() {
 }
 
 function finishSequence() {
-  isPlaying = false;
-  stopKick();
+  // 再生状態は維持
   currentPatternIndex =
     (currentPatternIndex + 1) % patternOrder.length;
 
-  document.getElementById("status").innerText =
-    "待機中...: ";
-}
+  currentNoteIndex = 0;
 
+  document.getElementById("status").innerText =
+    "再生中: " + patternOrder[currentPatternIndex];
+
+  // 次のパターンをそのまま再生
+  playNextNote();
+}
 // ==========================================
 // Utility
 // ==========================================
