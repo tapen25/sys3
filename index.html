@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Data Logger (ID ver / BPM108 Fixed)</title>
+<title>Data Logger base</title>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/tone/14.8.49/Tone.js"></script>
 
@@ -87,6 +87,22 @@ const polySynth = new Tone.PolySynth(Tone.Synth, {
   envelope: { attack: 0.1, decay: 0.2, sustain: 0.5, release: 1 },
   volume: -5
 }).toDestination();
+
+const kickSynth = new Tone.MembraneSynth({
+  pitchDecay: 0.05,
+  octaves: 4,
+  oscillator: { type: "sine" },
+  envelope: {
+    attack: 0.001,
+    decay: 0.4,
+    sustain: 0,
+    release: 0.8
+  },
+  volume: -4
+}).toDestination();
+
+let kickTimer = null;
+
 
 // ==========================================
 // 変数
@@ -225,6 +241,7 @@ function updateLoop() {
 function startSequence() {
   isPlaying = true;
   currentNoteIndex = 0;
+  startKick();
   playNextNote();
 }
 
@@ -248,17 +265,39 @@ function playNextNote() {
   const note = pattern[currentNoteIndex];
   if (note) polySynth.triggerAttackRelease(note, duration * 0.8);
 
-  document.getElementById("status").innerText =
-    `再生中 ${patternName} (${currentNoteIndex + 1}/${pattern.length})`;
+  /*document.getElementById("status").innerText =
+    `再生中 ${patternName} (${currentNoteIndex + 1}/${pattern.length})`;*/
 
   setTimeout(() => {
     currentNoteIndex++;
     playNextNote();
   }, duration * 1000);
 }
+function startKick() {
+  stopKick(); // 二重起動防止
+
+  const interval = (60 / FIXED_BPM) * 1000; // 4分音符
+
+  const playKick = () => {
+    if (!isPlaying) return;
+
+    kickSynth.triggerAttackRelease("C1", "16n");
+    kickTimer = setTimeout(playKick, interval);
+  };
+
+  playKick();
+}
+
+function stopKick() {
+  if (kickTimer) {
+    clearTimeout(kickTimer);
+    kickTimer = null;
+  }
+}
 
 function finishSequence() {
   isPlaying = false;
+  stopKick();
   currentPatternIndex =
     (currentPatternIndex + 1) % patternOrder.length;
 
